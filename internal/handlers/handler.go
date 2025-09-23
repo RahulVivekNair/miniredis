@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"miniredis/internal/deps"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -20,6 +21,7 @@ func NewHandler(deps *deps.AppDependencies) *Handler {
 
 type KVRequest struct {
 	Value string `json:"value"`
+	TTL   int    `json:"ttl,omitempty"`
 }
 
 // basic KV response
@@ -33,6 +35,7 @@ type MessageResponse struct {
 	Message string `json:"message"`
 	Key     string `json:"key,omitempty"`
 	Value   string `json:"value,omitempty"`
+	TTL     int    `json:"ttl,omitempty"`
 }
 
 type AllKeysResponse struct {
@@ -53,6 +56,16 @@ func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
 // GET /kv/{key}
 func (h *Handler) GetKeyHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
+
+	if exp, ok := h.deps.Store.Expiry.Load(key); ok {
+		if time.Now().After(exp.(time.Time)) {
+			h.deps.Store.Data.Delete(key)
+			h.deps.Store.Expiry.Delete(key)
+			respondJSONError(w, http.StatusNotFound, "key expired")
+			return
+		}
+	}
+
 	value, ok := h.deps.Store.Data.Load(key)
 	if !ok {
 		respondJSONError(w, http.StatusNotFound, "key not found")
@@ -72,15 +85,23 @@ func (h *Handler) PutKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	var body KVRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		respondJSONError(w, http.StatusNotFound, "invalid JSON")
+		respondJSONError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
 	// Store/overwrite value
 	_, loaded := h.deps.Store.Data.Swap(key, body.Value)
+
+	if body.TTL > 0 {
+		h.deps.Store.Expiry.Store(key, time.Now().Add(time.Duration(body.TTL)*time.Minute))
+	} else {
+		h.deps.Store.Expiry.Delete(key)
+	}
+
 	payload := &MessageResponse{
 		Key:   key,
 		Value: body.Value,
+		TTL:   body.TTL,
 	}
 	if loaded {
 		payload.Message = "updated"
@@ -94,6 +115,7 @@ func (h *Handler) PutKeyHandler(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteKeyHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
 	value, loaded := h.deps.Store.Data.LoadAndDelete(key)
+	h.deps.Store.Expiry.Delete(key)
 	if !loaded {
 		respondJSONError(w, http.StatusNotFound, "key not found")
 		return
@@ -126,5 +148,6 @@ func (h *Handler) ListKeysHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) FlushHandler(w http.ResponseWriter, r *http.Request) {
 	h.deps.Store.Data.Clear()
+	h.deps.Store.Expiry.Clear()
 	respondJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
