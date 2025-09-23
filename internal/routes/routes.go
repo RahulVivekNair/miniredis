@@ -14,7 +14,7 @@ func NewRouter(h *handlers.Handler) *mux.Router {
 	r.HandleFunc("/ping", h.HealthHandler).Methods("GET")
 
 	// KV operations (single key)
-	r.HandleFunc("/kv{key}", h.GetKeyHandler).Methods("GET")
+	r.HandleFunc("/kv/{key}", h.GetKeyHandler).Methods("GET")
 	r.HandleFunc("/kv/{key}", h.PutKeyHandler).Methods("PUT")
 	r.HandleFunc("/kv/{key}", h.DeleteKeyHandler).Methods("DELETE")
 

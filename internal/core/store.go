@@ -5,7 +5,7 @@ import (
 )
 
 type Store struct {
-	data sync.Map
+	Data sync.Map
 }
 
 func NewStore() *Store {
