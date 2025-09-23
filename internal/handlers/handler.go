@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"miniredis/internal/deps"
 	"net/http"
 
@@ -19,19 +18,36 @@ func NewHandler(deps *deps.AppDependencies) *Handler {
 	}
 }
 
-type payload struct {
+type KVRequest struct {
+	Value string `json:"value"`
+}
+
+// basic KV response
+type KVResponse struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
 
+// message-style response used for create/update/delete
+type MessageResponse struct {
+	Message string `json:"message"`
+	Key     string `json:"key,omitempty"`
+	Value   string `json:"value,omitempty"`
+}
+
+type AllKeysResponse struct {
+	Count int      `json:"count"`
+	Keys  []string `json:"keys,omitempty"`
+}
+
 // GET /
 func (h *Handler) HomeHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "Home")
+	respondJSON(w, http.StatusOK, map[string]string{"message": "Welcome to miniredis"})
 }
 
 // GET /ping
 func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "OK")
+	respondJSON(w, http.StatusOK, map[string]string{"status": "OK"})
 }
 
 // GET /kv/{key}
@@ -39,10 +55,10 @@ func (h *Handler) GetKeyHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
 	value, ok := h.deps.Store.Data.Load(key)
 	if !ok {
-		respondJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+		respondJSONError(w, http.StatusNotFound, "key not found")
 		return
 	}
-	payload := &payload{
+	payload := &KVResponse{
 		Key:   key,
 		Value: value.(string),
 	}
@@ -54,43 +70,61 @@ func (h *Handler) GetKeyHandler(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PutKeyHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
 
-	var body payload
+	var body KVRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		respondJSONError(w, http.StatusNotFound, "invalid JSON")
 		return
 	}
 
-	// Check if the key already exists
-	_, existed := h.deps.Store.Data.Load(key)
-
 	// Store/overwrite value
-	h.deps.Store.Data.Store(key, body.Value)
-
-	if existed {
-		respondJSON(w, http.StatusOK, map[string]string{
-			"message": "updated",
-			"key":     key,
-			"value":   body.Value,
-		})
-	} else {
-		respondJSON(w, http.StatusCreated, map[string]string{
-			"message": "created",
-			"key":     key,
-			"value":   body.Value,
-		})
+	_, loaded := h.deps.Store.Data.Swap(key, body.Value)
+	payload := &MessageResponse{
+		Key:   key,
+		Value: body.Value,
 	}
+	if loaded {
+		payload.Message = "updated"
+	} else {
+		payload.Message = "created"
+	}
+	respondJSON(w, http.StatusCreated, payload)
 }
 
 // DELETE /kv/{key}
 func (h *Handler) DeleteKeyHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
-	fmt.Fprintf(w, "You delete key: %v", key)
+	value, loaded := h.deps.Store.Data.LoadAndDelete(key)
+	if !loaded {
+		respondJSONError(w, http.StatusNotFound, "key not found")
+		return
+	}
+
+	payload := &MessageResponse{
+		Key:     key,
+		Value:   value.(string),
+		Message: "deleted",
+	}
+	respondJSON(w, http.StatusOK, payload)
+
 }
 
 func (h *Handler) ListKeysHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "You got all")
+	var keys []string
+
+	h.deps.Store.Data.Range(func(key, _ any) bool {
+		keys = append(keys, key.(string))
+		return true
+	})
+
+	payload := &AllKeysResponse{
+		Count: len(keys),
+		Keys:  keys,
+	}
+
+	respondJSON(w, http.StatusOK, payload)
 }
 
 func (h *Handler) FlushHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "You flush all")
+	h.deps.Store.Data.Clear()
+	respondJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
