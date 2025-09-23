@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"miniredis/internal/core"
 	"miniredis/internal/deps"
 	"miniredis/internal/handlers"
 	"miniredis/internal/routes"
@@ -20,6 +21,7 @@ func main() {
 
 	deps := &deps.AppDependencies{
 		Logger: logger,
+		Store:  core.NewStore(),
 	}
 
 	appHandlers := handlers.NewHandler(deps)
