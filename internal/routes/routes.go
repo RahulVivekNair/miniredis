@@ -2,11 +2,15 @@ package routes
 
 import (
 	"miniredis/internal/handlers"
+	"net/http"
+	"os"
 
+	ghandler "github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+	"github.com/justinas/alice"
 )
 
-func NewRouter(h *handlers.Handler) *mux.Router {
+func NewRouter(h *handlers.Handler) http.Handler {
 	r := mux.NewRouter()
 
 	// Home + health
@@ -22,5 +26,16 @@ func NewRouter(h *handlers.Handler) *mux.Router {
 	r.HandleFunc("/kv", h.ListKeysHandler).Methods("GET")
 	r.HandleFunc("/kv", h.FlushHandler).Methods("DELETE")
 
-	return r
+	middlewareChain := alice.New(
+		func(next http.Handler) http.Handler {
+			return ghandler.RecoveryHandler()(next) // panic-safe
+		},
+		ghandler.CompressHandler, // gzip responses
+		func(next http.Handler) http.Handler {
+			return ghandler.LoggingHandler(os.Stdout, next) // log requests
+		},
+	)
+
+	return middlewareChain.Then(r)
+
 }
